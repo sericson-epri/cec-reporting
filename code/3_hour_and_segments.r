@@ -3,7 +3,7 @@ setwd(file.path(dirname(rstudioapi::getSourceEditorContext()$path)))
 library(tidyverse)
 source("constants.R")
 
-scen = "base_highh2"
+scen = "reference"
 cleaned_data_folder = file.path("..", "cleaned_data", scen)
 figures_folder = file.path("..", "figures", scen)
 # Use 2026 times because year starts on the same day as REGEN times
@@ -25,6 +25,8 @@ df = raw_data %>%
                  names_to = "id", values_to = "value") %>%
     separate(id, into = c("type", "aggregation"), sep = "_")
 
+# ___________________________________________________
+# Create figure of normalized load, net load, and solar generation by hour of day
 df_hour = df %>%
     filter(aggregation == "hour") %>%
     select(-aggregation) %>%
@@ -32,7 +34,8 @@ df_hour = df %>%
     pivot_longer(cols = c(generation, capacity, af), names_to = "type", values_to = "value") %>%
     pivot_wider(names_from = tech, values_from = value) %>%
     group_by(year, hour) %>%
-    mutate(net_load = load - Solar[which(type == "generation")] - Wind[which(type == "generation")]) %>%
+    mutate(net_load = load - Solar[which(type == "generation")] -
+            Wind[which(type == "generation")] - `Offshore Wind`[which(type == "generation")]) %>%
     ungroup() %>%
     group_by(year, type) %>%
     mutate(order_id = rank(-net_load))
@@ -43,15 +46,13 @@ normalized_df = df_hour %>%
     mutate(load_norm = load/max(load), net_load_norm = net_load/max(load), solar = Solar / max(load), wind = Wind / max(load)) %>%
     ungroup() %>%
     mutate(time = times[hour], month = month(time), day = day(time), hour_of_day = hour(time),
-           month_name = month(time, label = TRUE))
-
-hourly_load_norm = normalized_df %>%
+           month_name = month(time, label = TRUE)) %>%
     group_by(year, hour_of_day) %>%
     summarize(Load = mean(load_norm), `Net Load` = pmax(0, mean(net_load_norm)), solar = mean(solar)) %>%
     pivot_longer(cols = c(Load, `Net Load`), names_to = "type", values_to = "value") %>%
     filter(year != 2050)
 
-ggplot(hourly_load_norm, aes(x = hour_of_day, y = value, color = type)) +
+ggplot(normalized_df, aes(x = hour_of_day, y = value, color = type)) +
     geom_area(aes(x = hour_of_day, y = solar / 2, fill = "Solar"), inherit.aes = FALSE, alpha = 0.75) +
     scale_fill_manual(element_blank(), values = c("Solar" = "#cdaf04")) +
     # geom_rect(aes(xmin = 8, xmax = 17, ymin = -Inf, ymax = Inf), fill = "#cdaf04", alpha = 0.2, color = NA) +
@@ -62,26 +63,22 @@ ggplot(hourly_load_norm, aes(x = hour_of_day, y = value, color = type)) +
     theme(legend.position = "top") +
     facet_wrap(~year)
 ggsave(file.path(figures_folder, "hourly_load_norm.png"), width = 10, height = 10, units = "in", dpi = 700)
+# ___________________________________________________
 
 #__________________________________________________
 # Calculate capacity factors based on top 25 net load hours
 num_hours_ranking = 25
-rank = df_hour %>%
+
+peak_capacity_factors = df_hour %>%
     arrange(type, order_id) %>%
     filter(order_id <= num_hours_ranking) %>%
     group_by(year, type) %>%
-    summarize(load = mean(load), net_load = mean(net_load), solar = mean(Solar), wind = mean(Wind)) %>%
+    summarize(load = mean(load), net_load = mean(net_load),
+            solar = mean(Solar), wind = mean(Wind), offshore_wind = mean(`Offshore Wind`)) %>%
     arrange(type)
-View(rank)
-write_csv(rank, file.path(cleaned_data_folder, "capacity_factors_top_25.csv"))
+View(peak_capacity_factors)
+write_csv(peak_capacity_factors, file.path(cleaned_data_folder, "capacity_factors_top_25.csv"))
 
-rank_1 = df_hour %>%
-    arrange(type, order_id) %>%
-    filter(order_id <= 1) %>%
-    group_by(year, type) %>%
-    summarize(load = mean(load), net_load = mean(net_load), solar = mean(Solar), wind = mean(Wind)) %>%
-    arrange(type)
-# View(rank_1)
 # __________________________________________________________
 # Comparison between hourly and segments
 ts = df %>%
