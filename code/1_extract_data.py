@@ -15,7 +15,7 @@ ragg = "allstate"
 scenarios = os.listdir(os.path.join(main_folder, "RegenCases", ragg))
 print(scenarios)
 #Update scenario name as needed
-scen = "base_highh2"
+scen = "min_compliance"
 output_folder = os.path.join("../", "cleaned_data", scen)
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
@@ -49,6 +49,7 @@ TECH_SET = {
     'hydr': 'Hydro',
     'geot': 'Geothermal',
     'wnos': 'Offshore Wind',
+    'wnosd': "Offshore Wind",
     'pvft': 'Solar',
     'pvsx': 'Solar',
     'pvdx': 'Solar',
@@ -381,16 +382,20 @@ af_h = (load_gdx_symbol(os.path.join(enduse_folder, f"segdata_8760_default.gdx")
         .pipe(subset_data, "region", cal_r)
         .pipe(get_tech, TECH_SET)
         .merge(capacity, on = ["tech_class", "vintage", "region", "year"])
+        # Keep only rows where tech is in renewable energy sub list
         .pipe(subset_data, "tech", RE_TECH)
-        # Add hourly generation as capacity * availability factor
+        # # Add hourly generation as capacity * availability factor
         .pipe(lambda x: x.assign(generation_h = x.capacity * x.af_h))
+        .assign(af_h_base = lambda x: x["af_h"])
         .groupby(["tech", "year", "hour"])
-        .agg({"generation_h": "sum", "capacity": "sum"})
+        .agg({"generation_h": "sum", "capacity": "sum", "af_h_base": "mean"})
         .reset_index()
         # Get average availability factor
         .pipe(lambda x: x.assign(af_h = x.generation_h / x.capacity))
-        # Keep only rows where tech is in renewable energy sub list
+        # Replace NaN values in af_h with af_h_base
         )
+af_h["af_h"] = af_h["af_h"].fillna(af_h["af_h_base"])
+af_h = af_h.drop(columns="af_h_base", axis=1)
 
 af_s = (load_gdx_symbol(os.path.join(enduse_folder, f"segdata_100_default.gdx"), "vrsc")
         .rename(columns={"s": "segment", "uni": "tech_class", "v": "vintage",
@@ -400,8 +405,9 @@ af_s = (load_gdx_symbol(os.path.join(enduse_folder, f"segdata_100_default.gdx"),
         .merge(capacity, on = ["tech_class", "vintage", "region", "year"])
         # Add hourly generation as capacity * availability factor
         .pipe(lambda x: x.assign(generation_s = x.capacity * x.af_s))
+        .assign(af_s_base = lambda x: x["af_s"])
         .groupby(["tech", "year", "segment"])
-        .agg({"generation_s": "sum", "capacity": "sum"})
+        .agg({"generation_s": "sum", "capacity": "sum", "af_s_base": "mean"})
         .reset_index()
         # Get average availability factor
         .pipe(lambda x: x.assign(af_s = x.generation_s / x.capacity))
@@ -409,7 +415,8 @@ af_s = (load_gdx_symbol(os.path.join(enduse_folder, f"segdata_100_default.gdx"),
         .pipe(subset_data, "tech", RE_TECH)
         .drop(columns="capacity", axis=1)
         )
-
+af_s["af_s"] = af_s["af_s"].fillna(af_s["af_s_base"])
+af_s = af_s.drop(columns="af_s_base", axis=1)
 # Merge all dataframes
 df = (
     af_h
